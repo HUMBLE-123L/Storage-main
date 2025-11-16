@@ -3,6 +3,7 @@ const mongoose = require('mongoose');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const File = require('../models/File');
 const Activity = require('../models/Activity');
 const StorageStats = require('../models/StorageStats');
@@ -34,6 +35,42 @@ const upload = multer({
   },
   fileFilter: function (req, file, cb) {
     cb(null, true);
+  }
+});
+
+// Public download by token (no auth required) - MUST be before /:fileId routes
+router.get('/public/:token', async (req, res) => {
+  try {
+    const { token } = req.params;
+    const file = await File.findOne({ publicUrl: token, inTrash: false });
+
+    if (!file) {
+      return res.status(404).json({ success: false, error: 'File not found' });
+    }
+
+    if (file.isFolder) {
+      return res.status(400).json({ success: false, error: 'Cannot download folders' });
+    }
+
+    if (!fs.existsSync(file.path)) {
+      return res.status(404).json({ success: false, error: 'File not found on server' });
+    }
+
+    await Activity.logActivity({
+      type: 'download_public',
+      fileId: file._id,
+      fileName: file.name,
+      userId: null
+    });
+
+    res.setHeader('Content-Disposition', `attachment; filename="${file.originalName}"`);
+    res.setHeader('Content-Type', 'application/octet-stream');
+
+    const fileStream = fs.createReadStream(file.path);
+    fileStream.pipe(res);
+  } catch (error) {
+    console.error('Public download error:', error);
+    res.status(500).json({ success: false, error: 'Server error while downloading file' });
   }
 });
 
@@ -913,6 +950,81 @@ router.post('/:fileId/share', authMiddleware, async (req, res) => {
       success: false,
       error: 'Server error while sharing file'
     });
+  }
+});
+
+// Generate or get a public share link for a file
+router.post('/:fileId/share-link', authMiddleware, async (req, res) => {
+  try {
+    const { fileId } = req.params;
+    console.log('Share link requested for fileId:', fileId);
+    console.log('User ID:', req.user._id);
+
+    const file = await File.findOne({ _id: fileId, userId: req.user._id });
+    console.log('File found:', file ? 'Yes' : 'No');
+    
+    if (!file) {
+      return res.status(404).json({ success: false, error: 'File not found' });
+    }
+
+    if (file.isFolder) {
+      return res.status(400).json({ success: false, error: 'Cannot create public link for folders' });
+    }
+
+    // If there's already a token, return it
+    if (file.isPublic && file.publicUrl) {
+      const base = process.env.BASE_URL || `http://localhost:${process.env.PORT || 3000}`;
+      return res.json({ success: true, publicLink: `${base}/api/files/public/${file.publicUrl}` });
+    }
+
+    const token = crypto.randomBytes(16).toString('hex');
+    file.isPublic = true;
+    file.publicUrl = token;
+
+    await file.save();
+
+    await Activity.logActivity({
+      type: 'share_link',
+      fileId: file._id,
+      fileName: file.name,
+      userId: req.user._id,
+      details: new Map([['action', 'created']])
+    });
+
+    const base = process.env.BASE_URL || `http://localhost:${process.env.PORT || 3000}`;
+    res.json({ success: true, publicLink: `${base}/api/files/public/${token}` });
+  } catch (error) {
+    console.error('Create share link error:', error);
+    res.status(500).json({ success: false, error: 'Server error while creating share link' });
+  }
+});
+
+// Revoke public share link
+router.post('/:fileId/revoke-link', authMiddleware, async (req, res) => {
+  try {
+    const { fileId } = req.params;
+
+    const file = await File.findOne({ _id: fileId, userId: req.user._id });
+    if (!file) {
+      return res.status(404).json({ success: false, error: 'File not found' });
+    }
+
+    file.isPublic = false;
+    file.publicUrl = null;
+    await file.save();
+
+    await Activity.logActivity({
+      type: 'share_link',
+      fileId: file._id,
+      fileName: file.name,
+      userId: req.user._id,
+      details: new Map([['action', 'revoked']])
+    });
+
+    res.json({ success: true, message: 'Public link revoked' });
+  } catch (error) {
+    console.error('Revoke share link error:', error);
+    res.status(500).json({ success: false, error: 'Server error while revoking share link' });
   }
 });
 

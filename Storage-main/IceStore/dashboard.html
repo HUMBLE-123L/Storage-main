@@ -756,6 +756,130 @@
       background: rgba(0, 191, 255, 0.5);
     }
 
+    /* Share Tabs Styles */
+    .share-tabs {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 20px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .share-tab {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 16px;
+      background: none;
+      border: none;
+      color: #ccc;
+      cursor: pointer;
+      font-size: 0.95em;
+      border-bottom: 3px solid transparent;
+      transition: all 0.3s ease;
+    }
+
+    .share-tab:hover {
+      color: white;
+    }
+
+    .share-tab.active {
+      color: #00BFFF;
+      border-bottom-color: #00BFFF;
+    }
+
+    .share-tab .material-icons {
+      font-size: 1.2em;
+    }
+
+    /* Link Sharing Tab Styles */
+    .share-link-tab {
+      display: none;
+      flex-direction: column;
+      gap: 15px;
+    }
+
+    .share-link-input-group {
+      display: flex;
+      gap: 10px;
+      margin: 10px 0;
+    }
+
+    .share-link-input {
+      flex: 1;
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(0, 191, 255, 0.3);
+      color: white;
+      padding: 12px 15px;
+      border-radius: 8px;
+      font-size: 0.95em;
+      font-family: 'Courier New', monospace;
+      word-break: break-all;
+    }
+
+    .share-link-input:focus {
+      outline: none;
+      border-color: rgba(0, 191, 255, 0.6);
+      background: rgba(255, 255, 255, 0.15);
+    }
+
+    .copy-btn {
+      background: rgba(0, 191, 255, 0.3);
+      border: 1px solid rgba(0, 191, 255, 0.6);
+      color: white;
+      padding: 12px 20px;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      font-weight: 500;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .copy-btn:hover {
+      background: rgba(0, 191, 255, 0.5);
+      transform: translateY(-2px);
+    }
+
+    .copy-btn.copied {
+      background: rgba(76, 238, 232, 0.3);
+      border-color: rgba(76, 238, 232, 0.6);
+    }
+
+    .share-link-info {
+      color: #ccc;
+      font-size: 0.9em;
+      padding: 12px;
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 8px;
+      border-left: 3px solid rgba(0, 191, 255, 0.3);
+    }
+
+    .loading-spinner {
+      display: inline-block;
+      width: 20px;
+      height: 20px;
+      border: 3px solid rgba(255, 255, 255, 0.3);
+      border-radius: 50%;
+      border-top-color: #00BFFF;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
+    .error-message {
+      background: rgba(255, 71, 87, 0.2);
+      border: 1px solid rgba(255, 71, 87, 0.5);
+      color: white;
+      padding: 15px;
+      border-radius: 8px;
+      text-align: center;
+    }
+
     /* Responsive Design */
     @media (max-width: 768px) {
       .sidebar {
@@ -971,7 +1095,21 @@
             <span class="material-icons">close</span>
           </button>
         </div>
-        <form class="share-form" id="share-form">
+
+        <!-- Share Type Tabs -->
+        <div class="share-tabs">
+          <button class="share-tab active" onclick="switchShareTab('email')">
+            <span class="material-icons">email</span>
+            <span>Share via Email</span>
+          </button>
+          <button class="share-tab" onclick="switchShareTab('link')">
+            <span class="material-icons">link</span>
+            <span>Share via Link</span>
+          </button>
+        </div>
+
+        <!-- Email Sharing Tab -->
+        <form class="share-form" id="share-form" style="display: block;">
           <input type="hidden" id="share-file-id">
           <div class="form-group">
             <label class="form-label">File Name</label>
@@ -993,6 +1131,51 @@
             <button type="submit" class="confirm-button">Share File</button>
           </div>
         </form>
+
+        <!-- Link Sharing Tab -->
+        <div id="link-share-tab" class="share-link-tab" style="display: none;">
+          <div class="form-group">
+            <label class="form-label">File Name</label>
+            <input type="text" id="share-link-file-name" class="form-input" readonly>
+          </div>
+
+          <div id="link-loading" style="display: none; text-align: center; padding: 20px;">
+            <div class="loading-spinner" style="margin: 0 auto;"></div>
+            <p style="margin-top: 10px; color: #ccc;">Generating share link...</p>
+          </div>
+
+          <div id="link-content" style="display: none;">
+            <label style="display: block; color: #ccc; margin-bottom: 10px; font-weight: 500;">
+              Public Link:
+            </label>
+            <div class="share-link-input-group">
+              <input 
+                type="text" 
+                id="link-share-input" 
+                class="share-link-input" 
+                readonly
+                onclick="this.select()"
+              >
+              <button type="button" class="copy-btn" onclick="copyLinkFromDashboard()">
+                <span class="material-icons" style="font-size: 20px;">content_copy</span>
+                <span id="link-copy-btn-text">Copy</span>
+              </button>
+            </div>
+
+            <div class="share-link-info">
+              <strong style="color: #00BFFF;">ℹ️ Anyone with this link can download the file</strong>
+              <p style="margin: 8px 0 0 0;">Share this link with anyone to grant access to download your file without requiring an account.</p>
+            </div>
+          </div>
+
+          <div id="link-error" style="display: none;">
+            <div class="error-message" id="link-error-msg"></div>
+          </div>
+
+          <div class="modal-actions">
+            <button type="button" class="cancel-button" onclick="closeShareModal()">Close</button>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -1930,11 +2113,129 @@
       // Populate modal fields
       document.getElementById('share-file-id').value = file.id;
       document.getElementById('share-file-name').value = file.name;
+      document.getElementById('share-link-file-name').value = file.name;
       document.getElementById('share-user-email').value = '';
       document.getElementById('share-permission').value = 'view';
       
+      // Reset to email tab
+      switchShareTab('email');
+      
       // Show modal
       document.getElementById('share-modal').classList.add('show');
+    }
+
+    // Tab switching functionality
+    function switchShareTab(tabName) {
+      // Hide all tabs
+      document.getElementById('share-form').style.display = 'none';
+      document.getElementById('link-share-tab').style.display = 'none';
+      
+      // Remove active class from all tabs
+      document.querySelectorAll('.share-tab').forEach(tab => {
+        tab.classList.remove('active');
+      });
+      
+      // Show selected tab
+      if (tabName === 'email') {
+        document.getElementById('share-form').style.display = 'block';
+        document.querySelector('.share-tab:first-child').classList.add('active');
+      } else if (tabName === 'link') {
+        document.getElementById('link-share-tab').style.display = 'block';
+        document.querySelector('.share-tab:nth-child(2)').classList.add('active');
+        
+        // Generate link when tab is opened
+        if (currentFileToShare) {
+          generateShareLinkFromDashboard(currentFileToShare);
+        }
+      }
+    }
+
+    // Generate share link for dashboard
+    async function generateShareLinkFromDashboard(file) {
+      try {
+        const loadingDiv = document.getElementById('link-loading');
+        const contentDiv = document.getElementById('link-content');
+        const errorDiv = document.getElementById('link-error');
+        
+        if (loadingDiv) loadingDiv.style.display = 'block';
+        if (contentDiv) contentDiv.style.display = 'none';
+        if (errorDiv) errorDiv.style.display = 'none';
+        
+        const token = localStorage.getItem('token');
+        const response = await fetch(`${API_BASE_URL}/files/${file.id}/share-link`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          }
+        });
+
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const result = await response.json();
+        
+        if (result.success && result.publicLink) {
+          const linkInput = document.getElementById('link-share-input');
+          
+          if (linkInput) linkInput.value = result.publicLink;
+          if (loadingDiv) loadingDiv.style.display = 'none';
+          if (contentDiv) contentDiv.style.display = 'block';
+          if (errorDiv) errorDiv.style.display = 'none';
+          
+          console.log('Share link generated:', result.publicLink);
+        } else {
+          throw new Error(result.error || 'Failed to generate share link');
+        }
+      } catch (error) {
+        console.error('Error generating share link:', error);
+        showLinkError('Failed to generate share link: ' + error.message);
+      }
+    }
+
+    function copyLinkFromDashboard() {
+      const linkInput = document.getElementById('link-share-input');
+      const copyBtn = document.querySelector('.copy-btn');
+      const copyBtnText = document.getElementById('link-copy-btn-text');
+      
+      if (!linkInput) {
+        alert('Share link not available');
+        return;
+      }
+      
+      try {
+        linkInput.select();
+        document.execCommand('copy');
+        
+        // Visual feedback
+        if (copyBtn) {
+          copyBtn.classList.add('copied');
+          if (copyBtnText) copyBtnText.textContent = 'Copied!';
+          
+          setTimeout(() => {
+            copyBtn.classList.remove('copied');
+            if (copyBtnText) copyBtnText.textContent = 'Copy';
+          }, 2000);
+        }
+        
+        console.log('Link copied to clipboard');
+      } catch (error) {
+        console.error('Failed to copy link:', error);
+        alert('Failed to copy link. Please copy manually: ' + linkInput.value);
+      }
+    }
+
+    function showLinkError(message) {
+      const loadingDiv = document.getElementById('link-loading');
+      const contentDiv = document.getElementById('link-content');
+      const errorDiv = document.getElementById('link-error');
+      const errorMsg = document.getElementById('link-error-msg');
+      
+      if (loadingDiv) loadingDiv.style.display = 'none';
+      if (contentDiv) contentDiv.style.display = 'none';
+      if (errorDiv) errorDiv.style.display = 'block';
+      if (errorMsg) errorMsg.textContent = message;
     }
 
     function closeShareModal() {
