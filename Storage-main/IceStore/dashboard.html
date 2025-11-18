@@ -1584,6 +1584,11 @@
           selectedFiles.clear();
           await loadUserFiles();
           await updateStorageUsage();
+          // Notify Recent page (same tab) to refresh
+          try {
+            document.dispatchEvent(new CustomEvent('activity:changed', { detail: { action: 'upload', files: data.files } }));
+            try { localStorage.setItem('recentActivityUpdate', JSON.stringify({ ts: Date.now(), action: 'upload' })); } catch(e) { /* ignore storage errors */ }
+          } catch(e) { console.error('Dispatch activity event failed', e); }
         }
       }
     }
@@ -1733,6 +1738,9 @@
           showNotification(`Successfully uploaded folder with ${data.files.length} file(s)!`, 'success');
           await loadUserFiles();
           await updateStorageUsage();
+          try {
+            document.dispatchEvent(new CustomEvent('activity:changed', { detail: { action: 'upload', files: data.files } }));
+          } catch(e) { console.error('Dispatch activity event failed', e); }
         } else {
           showNotification(`Error uploading folder: ${data.error}`, 'error');
         }
@@ -1821,6 +1829,10 @@
         if (data.success) {
           showNotification('Renamed successfully!', 'success');
           await loadUserFiles();
+          try {
+            document.dispatchEvent(new CustomEvent('activity:changed', { detail: { action: 'rename', fileId: fileId, fileName: newName } }));
+            try { localStorage.setItem('recentActivityUpdate', JSON.stringify({ ts: Date.now(), action: 'rename', fileId })); } catch(e) { }
+          } catch(e) { console.error(e); }
         } else {
           showNotification(`Error renaming: ${data.error}`, 'error');
           await loadUserFiles(); // Reload to get original name
@@ -2242,6 +2254,10 @@
           showNotification('Moved successfully!', 'success');
           closeMoveModal();
           await loadUserFiles();
+          try {
+            document.dispatchEvent(new CustomEvent('activity:changed', { detail: { action: 'move', fileId: currentContextFile.id, targetFolderId: targetFolderId } }));
+            try { localStorage.setItem('recentActivityUpdate', JSON.stringify({ ts: Date.now(), action: 'move', fileId: currentContextFile.id, targetFolderId })); } catch(e) {}
+          } catch(e) { console.error(e); }
         } else {
           showNotification(`Error moving: ${data.error}`, 'error');
         }

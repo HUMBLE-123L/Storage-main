@@ -685,66 +685,34 @@
         <span class="file-date">Today</span>
       </div>
       <div class="file-actions">
-        <button class="file-action-btn" title="Download">
+        <button class="file-action-btn" title="Download" data-action="download">
           <span class="material-icons">download</span>
         </button>
-        <button class="file-action-btn" title="Share Link">
-          <span class="material-icons">link</span>
+        <button class="file-action-btn" title="Remove" data-action="remove">
+          <span class="material-icons">delete</span>
         </button>
-        <button class="file-action-btn" title="View Details">
+        <button class="file-action-btn" title="View Details" data-action="info">
           <span class="material-icons">info</span>
         </button>
       </div>
     </div>
   </template>
 
-  <!-- Share Link Modal -->
-  <div class="modal" id="share-link-modal">
+  <!-- Remove confirmation modal -->
+  <div class="modal" id="remove-confirm-modal">
     <div class="modal-content">
       <div class="modal-header">
-        <h2>Share File via Link</h2>
-        <button class="modal-close" onclick="closeShareLinkModal()">
+        <h2>Remove Shared File</h2>
+        <button class="modal-close" onclick="closeRemoveModal()">
           <span class="material-icons">close</span>
         </button>
       </div>
 
-      <p id="modal-file-name" style="color: #ccc; margin: 10px 0;"></p>
-
-      <div id="share-link-loading" style="display: none; text-align: center; padding: 20px;">
-        <div class="loading-spinner" style="margin: 0 auto;"></div>
-        <p style="margin-top: 10px; color: #ccc;">Generating share link...</p>
-      </div>
-
-      <div id="share-link-content" style="display: none;">
-        <label style="display: block; color: #ccc; margin-bottom: 10px; font-weight: 500;">
-          Public Link:
-        </label>
-        <div class="share-link-input-group">
-          <input 
-            type="text" 
-            id="share-link-input" 
-            class="share-link-input" 
-            readonly
-            onclick="this.select()"
-          >
-          <button class="copy-btn" onclick="copyShareLink()">
-            <span class="material-icons" style="font-size: 20px;">content_copy</span>
-            <span id="copy-btn-text">Copy</span>
-          </button>
-        </div>
-
-        <div class="share-link-info">
-          <strong style="color: #00BFFF;">ℹ️ Anyone with this link can download the file</strong>
-          <p style="margin: 8px 0 0 0;">Share this link with anyone to grant access to download your file without requiring an account.</p>
-        </div>
-      </div>
-
-      <div id="share-link-error" style="display: none;">
-        <div class="error-message" id="share-link-error-msg"></div>
-      </div>
+      <p id="remove-modal-message" style="color: #ccc; margin: 10px 0;">Are you sure you want to remove this shared file from your list?</p>
 
       <div class="modal-actions">
-        <button class="modal-btn modal-btn-close" onclick="closeShareLinkModal()">Close</button>
+        <button class="modal-btn modal-btn-close" onclick="closeRemoveModal()">Cancel</button>
+        <button class="modal-btn" id="confirm-remove-btn" style="background: rgba(255,71,87,0.9); color: white;">Remove</button>
       </div>
     </div>
   </div>
@@ -869,8 +837,9 @@
         const sharedBy = clone.querySelector('.shared-by');
         const size = clone.querySelector('.file-size');
         const date = clone.querySelector('.file-date');
-        const downloadBtn = clone.querySelector('.file-action-btn:nth-child(1)');
-        const infoBtn = clone.querySelector('.file-action-btn:nth-child(2)');
+        const downloadBtn = clone.querySelector('[data-action="download"]');
+        const removeBtn = clone.querySelector('[data-action="remove"]');
+        const infoBtn = clone.querySelector('[data-action="info"]');
 
         // Set file icon based on type
         const iconName = getFileIcon(file.type);
@@ -908,14 +877,13 @@
           });
         }
 
-        const shareLinkBtn = clone.querySelector('.file-action-btn:nth-child(2)');
-        if (shareLinkBtn) {
-          shareLinkBtn.addEventListener('click', function(e) {
+        if (removeBtn) {
+          removeBtn.addEventListener('click', function(e) {
             e.stopPropagation();
-            openShareLinkModal(file);
+            openRemoveModal(file);
           });
         }
-        
+
         if (infoBtn) {
           infoBtn.addEventListener('click', function(e) {
             e.stopPropagation();
@@ -983,7 +951,13 @@
         });
 
         if (!response.ok) {
-          throw new Error(`Download failed: ${response.status}`);
+          // try to read JSON error message if available
+          let msg = `Download failed: ${response.status}`;
+          try {
+            const err = await response.json();
+            if (err && err.error) msg = err.error;
+          } catch(e) { /* ignore json parse errors */ }
+          throw new Error(msg);
         }
 
         // Create blob from response and trigger download
@@ -998,12 +972,70 @@
         window.URL.revokeObjectURL(url);
         document.body.removeChild(a);
         
-        alert(`Download started: ${file.name}`);
+        showNotification(`Download started: ${file.name}`, 'info');
         
       } catch (error) {
         console.error('Error downloading file:', error);
-        alert('Failed to download file: ' + error.message);
+        showNotification('Failed to download file: ' + error.message, 'error');
       }
+    }
+
+    // Remove shared entry for current user
+    async function removeSharedFile(file) {
+      try {
+        const token = localStorage.getItem('token');
+        const response = await fetch(`${API_BASE_URL}/files/${file.id}/remove-share`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          }
+        });
+
+        // Read the response text once, then try to parse JSON from it to avoid body stream already read
+        const raw = await response.text();
+        let result = null;
+        try {
+          result = raw ? JSON.parse(raw) : null;
+        } catch (parseErr) {
+          // raw may be HTML or plain text
+          throw new Error(raw || `Failed to remove shared file: ${response.status}`);
+        }
+
+        if (response.ok && result && result.success) {
+          showNotification('Removed shared file from your list', 'success');
+          // Refresh list
+          await loadSharedFiles();
+        } else {
+          throw new Error(result ? (result.error || 'Failed to remove shared file') : `Failed to remove shared file: ${response.status}`);
+        }
+      } catch (error) {
+        console.error('Error removing shared file:', error);
+        showNotification('Failed to remove shared file: ' + error.message, 'error');
+      }
+    }
+
+    // Small in-page notification helper
+    function showNotification(message, type = 'info') {
+      const div = document.createElement('div');
+      div.className = `notification ${type}`;
+      div.textContent = message;
+      div.style.position = 'fixed';
+      div.style.right = '20px';
+      div.style.top = '20px';
+      div.style.zIndex = 2000;
+      div.style.padding = '12px 16px';
+      div.style.borderRadius = '8px';
+      div.style.color = 'white';
+      if (type === 'success') div.style.background = 'rgba(76,175,80,0.9)';
+      else if (type === 'error') div.style.background = 'rgba(244,67,54,0.9)';
+      else div.style.background = 'rgba(33,150,243,0.9)';
+
+      document.body.appendChild(div);
+      setTimeout(() => {
+        div.style.opacity = '0';
+        setTimeout(() => div.remove(), 400);
+      }, 2500);
     }
 
     function showFileInfo(file) {
@@ -1076,129 +1108,34 @@ ${file.canEdit ? '\nYou have edit permissions for this file' : '\nYou can only v
       }
     }
 
-    // Share Link Functions
-    let currentFileForSharing = null;
-
-    async function openShareLinkModal(file) {
-      currentFileForSharing = file;
-      
-      const modal = document.getElementById('share-link-modal');
-      const fileNameElement = document.getElementById('modal-file-name');
-      const loadingDiv = document.getElementById('share-link-loading');
-      const contentDiv = document.getElementById('share-link-content');
-      const errorDiv = document.getElementById('share-link-error');
-      
+    // Remove confirmation modal handlers
+    let currentFileForRemoval = null;
+    function openRemoveModal(file) {
+      currentFileForRemoval = file;
+      const modal = document.getElementById('remove-confirm-modal');
+      const msg = document.getElementById('remove-modal-message');
+      if (msg) msg.textContent = `Remove shared file "${file.name}" from your list?`;
       if (modal) modal.classList.add('active');
-      if (fileNameElement) fileNameElement.textContent = `File: ${file.name}`;
-      if (loadingDiv) loadingDiv.style.display = 'block';
-      if (contentDiv) contentDiv.style.display = 'none';
-      if (errorDiv) errorDiv.style.display = 'none';
-      
-      try {
-        await generateShareLink(file);
-      } catch (error) {
-        console.error('Error in openShareLinkModal:', error);
+      const confirmBtn = document.getElementById('confirm-remove-btn');
+      if (confirmBtn) {
+        confirmBtn.onclick = async function() {
+          await removeSharedFile(currentFileForRemoval);
+          closeRemoveModal();
+        };
       }
     }
 
-    async function generateShareLink(file) {
-      try {
-        const token = localStorage.getItem('token');
-        const response = await fetch(`${API_BASE_URL}/files/${file.id}/share-link`, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          }
-        });
-
-        if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
-        }
-
-        const result = await response.json();
-        
-        if (result.success && result.publicLink) {
-          const linkInput = document.getElementById('share-link-input');
-          const loadingDiv = document.getElementById('share-link-loading');
-          const contentDiv = document.getElementById('share-link-content');
-          const errorDiv = document.getElementById('share-link-error');
-          
-          if (linkInput) linkInput.value = result.publicLink;
-          if (loadingDiv) loadingDiv.style.display = 'none';
-          if (contentDiv) contentDiv.style.display = 'block';
-          if (errorDiv) errorDiv.style.display = 'none';
-          
-          console.log('Share link generated:', result.publicLink);
-        } else {
-          throw new Error(result.error || 'Failed to generate share link');
-        }
-      } catch (error) {
-        console.error('Error generating share link:', error);
-        showShareLinkError('Failed to generate share link: ' + error.message);
-      }
-    }
-
-    function copyShareLink() {
-      const linkInput = document.getElementById('share-link-input');
-      const copyBtn = document.querySelector('.copy-btn');
-      const copyBtnText = document.getElementById('copy-btn-text');
-      
-      if (!linkInput) {
-        alert('Share link not available');
-        return;
-      }
-      
-      try {
-        linkInput.select();
-        document.execCommand('copy');
-        
-        // Visual feedback
-        if (copyBtn) {
-          copyBtn.classList.add('copied');
-          if (copyBtnText) copyBtnText.textContent = 'Copied!';
-          
-          setTimeout(() => {
-            copyBtn.classList.remove('copied');
-            if (copyBtnText) copyBtnText.textContent = 'Copy';
-          }, 2000);
-        }
-        
-        console.log('Link copied to clipboard');
-      } catch (error) {
-        console.error('Failed to copy link:', error);
-        alert('Failed to copy link. Please copy manually: ' + linkInput.value);
-      }
-    }
-
-    function showShareLinkError(message) {
-      const loadingDiv = document.getElementById('share-link-loading');
-      const contentDiv = document.getElementById('share-link-content');
-      const errorDiv = document.getElementById('share-link-error');
-      const errorMsg = document.getElementById('share-link-error-msg');
-      
-      if (loadingDiv) loadingDiv.style.display = 'none';
-      if (contentDiv) contentDiv.style.display = 'none';
-      if (errorDiv) errorDiv.style.display = 'block';
-      if (errorMsg) errorMsg.textContent = message;
-    }
-
-    function closeShareLinkModal() {
-      const modal = document.getElementById('share-link-modal');
+    function closeRemoveModal() {
+      currentFileForRemoval = null;
+      const modal = document.getElementById('remove-confirm-modal');
       if (modal) modal.classList.remove('active');
-      
-      currentFileForSharing = null;
-      
-      // Reset form
-      const linkInput = document.getElementById('share-link-input');
-      if (linkInput) linkInput.value = '';
     }
 
     // Close modal when clicking outside of it
     window.addEventListener('click', function(event) {
-      const modal = document.getElementById('share-link-modal');
+      const modal = document.getElementById('remove-confirm-modal');
       if (event.target === modal) {
-        closeShareLinkModal();
+        closeRemoveModal();
       }
     });
 

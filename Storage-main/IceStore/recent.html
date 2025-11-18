@@ -731,6 +731,9 @@
         delete: `You deleted ${activity.fileName}`,
         restore: `You restored ${activity.fileName}`,
         create_folder: `You created folder ${activity.fileName}`
+      ,
+        modified: `You modified ${activity.fileName}`,
+        upload_skipped_duplicate: `Upload skipped (duplicate): ${activity.fileName}`
       };
       
       return descriptions[activity.type] || `You performed ${activity.type} on ${activity.fileName}`;
@@ -747,6 +750,9 @@
         'delete': 'delete',
         'restore': 'restore',
         'create_folder': 'create_new_folder'
+      ,
+        'modified': 'edit',
+        'upload_skipped_duplicate': 'file_upload'
       };
       
       return iconMap[activityType] || 'description';
@@ -937,6 +943,20 @@
       localStorage.removeItem('user');
       window.location.href = 'login.html';
     }
+
+    // Refresh recent activities when other pages dispatch updates (single-tab UX)
+    document.addEventListener('activity:changed', () => {
+      const token = localStorage.getItem('token');
+      if (token) loadRecentActivities(token);
+    });
+
+    // Also listen for cross-tab updates via localStorage (multi-tab UX)
+    window.addEventListener('storage', (e) => {
+      if (e.key === 'recentActivityUpdate') {
+        const token = localStorage.getItem('token');
+        if (token) loadRecentActivities(token);
+      }
+    });
 
     // Initialize when page loads
     document.addEventListener('DOMContentLoaded', initRecent);

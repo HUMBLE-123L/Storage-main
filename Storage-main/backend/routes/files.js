@@ -687,9 +687,57 @@ router.get('/recent', authMiddleware, async (req, res) => {
       file: activity.fileId
     }));
 
+    // Also include recently modified files (updatedAt) so "Recent" shows modified files
+    try {
+      const recentFiles = await File.find({ userId: req.user._id, inTrash: false })
+        .sort({ updatedAt: -1 })
+        .limit(Math.max(50, parseInt(limit) * 2))
+        .lean();
+
+      // Build a map of fileId -> latest activity timestamp (if any)
+      const activityFileTimestamps = new Map();
+      formattedActivities.forEach(a => {
+        const fid = a.file && a.file._id ? a.file._id.toString() : (a.file && a.file.id ? a.file.id.toString() : null);
+        if (fid) {
+          activityFileTimestamps.set(fid, new Date(a.timestamp).getTime());
+        }
+      });
+
+      for (const f of recentFiles) {
+        const fid = f._id.toString();
+        const fileUpdatedAt = f.updatedAt ? new Date(f.updatedAt).getTime() : null;
+
+        // If there's no activity for this file or the file's updatedAt is newer than the last activity,
+        // include a synthetic "modified" activity so it appears in Recent.
+        if (fileUpdatedAt && (!activityFileTimestamps.has(fid) || fileUpdatedAt > activityFileTimestamps.get(fid))) {
+          formattedActivities.push({
+            id: `file_${fid}`,
+            type: 'modified',
+            fileName: f.name,
+            description: `Modified ${f.name}`,
+            timestamp: f.updatedAt,
+            icon: getActivityIcon('rename'),
+            file: { _id: f._id, name: f.name, type: f.type, parentFolder: f.parentFolder }
+          });
+        }
+      }
+    } catch (fileErr) {
+      console.error('Error fetching recent files for merge:', fileErr);
+    }
+
+    // Merge and sort by timestamp desc and trim to limit
+    const merged = formattedActivities
+      .map(a => ({ ...a, _ts: new Date(a.timestamp).getTime() }))
+      .sort((a, b) => b._ts - a._ts)
+      .slice(0, parseInt(limit))
+      .map(a => {
+        delete a._ts;
+        return a;
+      });
+
     res.json({
       success: true,
-      activities: formattedActivities
+      activities: merged
     });
   } catch (error) {
     console.error('Get recent activities error:', error);
@@ -708,6 +756,39 @@ router.get('/debug/activities', authMiddleware, async (req, res) => {
     return res.json({ success: true, activities });
   } catch (error) {
     console.error('Debug activities error:', error);
+    return res.status(500).json({ success: false, error: 'Server error' });
+  }
+});
+
+// Debug endpoint: return file document for debugging (owner or shared recipient)
+router.get('/:fileId/debug', authMiddleware, async (req, res) => {
+  try {
+    const { fileId } = req.params;
+    const file = await File.findOne({
+      _id: fileId,
+      $or: [
+        { userId: req.user._id },
+        { 'sharedWith.user': req.user._id }
+      ]
+    }).lean();
+
+    if (!file) {
+      return res.status(404).json({ success: false, error: 'File not found or access denied' });
+    }
+
+    // Include a simple server-side check whether the file exists on disk
+    let exists = false;
+    try {
+      if (file.path) {
+        exists = require('fs').existsSync(file.path);
+      }
+    } catch (e) {
+      exists = false;
+    }
+
+    return res.json({ success: true, file, existsOnDisk: exists });
+  } catch (error) {
+    console.error('Debug file endpoint error:', error);
     return res.status(500).json({ success: false, error: 'Server error' });
   }
 });
@@ -756,6 +837,41 @@ router.get('/shared', authMiddleware, async (req, res) => {
       success: false,
       error: 'Server error while fetching shared files'
     });
+  }
+});
+
+// Remove shared entry for current user (recipient removes the share from their view)
+router.post('/:fileId/remove-share', authMiddleware, async (req, res) => {
+  try {
+    const { fileId } = req.params;
+
+    const file = await File.findOne({ _id: fileId }).populate('sharedWith.user', 'username email');
+    if (!file) {
+      return res.status(404).json({ success: false, error: 'File not found' });
+    }
+
+    // Check if user is in sharedWith list
+    const shareIndex = file.sharedWith.findIndex(share => share.user && share.user._id.toString() === req.user._id.toString());
+    if (shareIndex === -1) {
+      return res.status(403).json({ success: false, error: 'You are not a recipient of this file' });
+    }
+
+    // Remove the shared entry for this user
+    file.sharedWith.splice(shareIndex, 1);
+    await file.save();
+
+    await Activity.logActivity({
+      type: 'share',
+      fileId: file._id,
+      fileName: file.name,
+      userId: req.user._id,
+      details: new Map([['action', 'removed_by_recipient']])
+    });
+
+    return res.json({ success: true, message: 'Removed shared file from your list' });
+  } catch (error) {
+    console.error('Remove shared entry error:', error);
+    return res.status(500).json({ success: false, error: 'Server error while removing shared entry' });
   }
 });
 
@@ -1051,11 +1167,98 @@ router.get('/:fileId/download', authMiddleware, async (req, res) => {
       });
     }
 
-    if (!fs.existsSync(file.path)) {
-      return res.status(404).json({
-        success: false,
-        error: 'File not found on server'
-      });
+    if (!file.path || !fs.existsSync(file.path)) {
+      // Log file path and existence for debugging
+      try { console.error(`Download requested but file missing on disk. fileId=${fileId}, path=${file.path}`); } catch(e) {}
+
+      // Try to find the file in the owner's upload directory as a fallback (more flexible)
+      try {
+        const ownerId = file.userId ? file.userId.toString() : null;
+        let found = null;
+        const baseName = file.originalName ? path.basename(file.originalName, path.extname(file.originalName)) : null;
+
+        if (ownerId) {
+          const userUploadDir = path.join(__dirname, '../uploads', ownerId);
+          try {
+            if (fs.existsSync(userUploadDir)) {
+              const entries = fs.readdirSync(userUploadDir);
+              for (const e of entries) {
+                const candidatePath = path.join(userUploadDir, e);
+                try {
+                  const stat = fs.statSync(candidatePath);
+                  if (!stat.isFile()) continue;
+                  const candidateBase = path.basename(e, path.extname(e));
+                  const sizeMatches = file.size && stat.size === (file.size || 0);
+                  const nameMatches = baseName && candidateBase.toLowerCase().includes(baseName.toLowerCase());
+                  if (sizeMatches && nameMatches) { found = candidatePath; break; }
+                  if (!file.size && nameMatches) { found = candidatePath; break; }
+                  if (!found && nameMatches) { found = candidatePath; }
+                } catch (innerErr) {
+                  continue;
+                }
+              }
+            } else {
+              console.error(`Owner upload dir does not exist: ${userUploadDir}`);
+            }
+          } catch (dirErr) {
+            console.error('Error reading owner upload dir:', dirErr);
+          }
+        }
+
+        // Global search across uploads as a last resort
+        if (!found) {
+          try {
+            const uploadsRoot = path.join(__dirname, '../uploads');
+            if (fs.existsSync(uploadsRoot)) {
+              const users = fs.readdirSync(uploadsRoot);
+              for (const u of users) {
+                const dir = path.join(uploadsRoot, u);
+                if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) continue;
+                const entries = fs.readdirSync(dir);
+                for (const e of entries) {
+                  const candidatePath = path.join(dir, e);
+                  try {
+                    const stat = fs.statSync(candidatePath);
+                    if (!stat.isFile()) continue;
+                    const candidateBase = path.basename(e, path.extname(e));
+                    const sizeMatches = file.size && stat.size === (file.size || 0);
+                    const nameMatches = baseName && candidateBase.toLowerCase().includes(baseName.toLowerCase());
+                    if (sizeMatches && nameMatches) { found = candidatePath; break; }
+                    if (!file.size && nameMatches) { found = candidatePath; break; }
+                    if (!found && nameMatches) { found = candidatePath; }
+                  } catch (innerErr) {
+                    continue;
+                  }
+                }
+                if (found) break;
+              }
+            }
+          } catch (globalErr) {
+            console.error('Error during global uploads search:', globalErr);
+          }
+        }
+
+        if (found) {
+          console.log(`Found file on disk via fallback for fileId=${fileId}: ${found}`);
+          file.path = found;
+          // Persist found path to DB so future downloads work without fallback
+          try {
+            await File.updateOne({ _id: file._id }, { $set: { path: found } });
+            console.log(`Persisted found path to DB for fileId=${fileId}`);
+          } catch (persistErr) {
+            console.error('Failed to persist fallback path to DB:', persistErr);
+          }
+        } else {
+          console.error(`Fallback search did not locate file for fileId=${fileId}`);
+          return res.status(404).json({
+            success: false,
+            error: 'File found in DB but not on server (file not found on server)'
+          });
+        }
+      } catch (fallbackErr) {
+        console.error('Error during fallback file search:', fallbackErr);
+        return res.status(500).json({ success: false, error: 'Server error while locating file' });
+      }
     }
 
     await Activity.logActivity({
