@@ -144,16 +144,13 @@ storageStatsSchema.statics.updateUserStats = async function(userId) {
     console.log(`Updated stats for user ${userId}:`, {
       totalFiles,
       totalFolders,
-      totalSize: calculatedTotalSize,
+      calculatedTotalSize,
+      usedStorage: result.usedStorage,
+      resultUsedStorage: result?.usedStorage,
       fileTypeBreakdown
     });
 
-    return { 
-      totalFiles, 
-      totalFolders, 
-      totalSize: calculatedTotalSize, 
-      fileTypeBreakdown 
-    };
+    return result;
   } catch (error) {
     console.error('Error updating storage stats:', error);
     throw error;

@@ -47,6 +47,19 @@ activitySchema.statics.logActivity = async function(activityData) {
   try {
     const activity = new this(activityData);
     await activity.save();
+    // Log saved activity for easier debugging of recent activity visibility
+    try {
+      console.log('Activity logged:', {
+        id: activity._id.toString(),
+        type: activity.type,
+        fileName: activity.fileName,
+        userId: activity.userId ? activity.userId.toString() : null,
+        createdAt: activity.createdAt
+      });
+    } catch (logErr) {
+      console.error('Error logging activity debug info:', logErr);
+    }
+
     return activity;
   } catch (error) {
     console.error('Error logging activity:', error);

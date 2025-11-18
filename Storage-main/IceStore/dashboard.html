@@ -115,6 +115,7 @@
 
     .sidebar-progress-fill {
       height: 100%;
+      width: 0%;
       background: linear-gradient(90deg, #00BFFF, #4DEEE8);
       border-radius: 3px;
       transition: width 0.5s ease;
@@ -1076,8 +1077,10 @@
           </button>
         </div>
         <div class="form-group">
-          <label style="color: #ccc; margin-bottom: 8px; display: block;">Enter target folder ID (leave empty for root):</label>
-          <input type="text" id="move-target-folder" class="form-input" placeholder="Folder ID or leave empty for root" style="width: 100%; padding: 12px; background: rgba(255, 255, 255, 0.1); border: 1px solid rgba(255, 255, 255, 0.2); border-radius: 6px; color: white;">
+          <label style="color: #ccc; margin-bottom: 8px; display: block;">Select target folder:</label>
+          <select id="move-target-folder" class="form-input" style="width: 100%; padding: 12px; background: rgba(255, 255, 255, 0.1); border: 1px solid rgba(255, 255, 255, 0.2); border-radius: 6px; color: white;">
+            <option value="">My Files (Root)</option>
+          </select>
         </div>
         <div class="modal-actions">
           <button type="button" class="cancel-button" onclick="closeMoveModal()">Cancel</button>
@@ -1639,7 +1642,120 @@
       const files = event.target.files;
       if (files.length === 0) return;
       
-      await processFiles(files);
+      // For folder uploads, we need to preserve the folder structure
+      await processFolderUpload(files);
+    }
+
+    async function processFolderUpload(files) {
+      const token = localStorage.getItem('token');
+      const newButton = document.getElementById('new-button');
+
+      if (!token) {
+        showNotification('Please login again', 'error');
+        window.location.href = 'login.html';
+        return;
+      }
+
+      // Show loading state
+      if (newButton) {
+        newButton.innerHTML = '<div class="loading-spinner"></div>Uploading...';
+        newButton.disabled = true;
+      }
+
+      try {
+        // Build folder structure from file paths
+        const folderStructure = {};
+        const fileList = Array.from(files);
+        
+        // Parse folder structure from file paths
+        fileList.forEach(file => {
+          const pathParts = file.webkitRelativePath.split('/');
+          
+          // Build nested folder structure
+          let current = folderStructure;
+          for (let i = 0; i < pathParts.length - 1; i++) {
+            const folderName = pathParts[i];
+            if (!current[folderName]) {
+              current[folderName] = {};
+            }
+            current = current[folderName];
+          }
+          
+          // Store the file with its path info
+          if (!current.files) {
+            current.files = [];
+          }
+          current.files.push({
+            file: file,
+            relativePath: pathParts.slice(1).join('/'), // Remove the root folder name
+            fileName: pathParts[pathParts.length - 1]
+          });
+        });
+
+        console.log('Folder structure:', folderStructure);
+        
+        // Send folder structure info along with files
+        const formData = new FormData();
+        const parentFolder = currentFolder === 'root' ? '' : currentFolder;
+        
+        console.log('Folder upload - currentFolder:', currentFolder, 'parentFolder to send:', parentFolder);
+        
+        if (parentFolder) {
+          formData.append('parentFolder', parentFolder);
+        }
+        
+        formData.append('isFolder', 'true');
+        formData.append('folderStructure', JSON.stringify(folderStructure));
+        
+        // Add all files
+        fileList.forEach(file => {
+          formData.append('files', file);
+          formData.append('filePaths', file.webkitRelativePath);
+        });
+
+        console.log('Uploading folder to:', parentFolder || 'root');
+        
+        const response = await fetch(`${API_BASE_URL}/files/upload-multiple`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`
+          },
+          body: formData
+        });
+
+        if (response.status === 401) {
+          throw new Error('Authentication failed');
+        }
+
+        const data = await response.json();
+        
+        if (data.success) {
+          showNotification(`Successfully uploaded folder with ${data.files.length} file(s)!`, 'success');
+          await loadUserFiles();
+          await updateStorageUsage();
+        } else {
+          showNotification(`Error uploading folder: ${data.error}`, 'error');
+        }
+      } catch (error) {
+        console.error('Folder upload error:', error);
+        if (error.message.includes('Authentication failed')) {
+          showNotification('Session expired. Please login again.', 'error');
+          setTimeout(() => {
+            window.location.href = 'login.html';
+          }, 2000);
+        } else {
+          showNotification('Error uploading folder: ' + error.message, 'error');
+        }
+      }
+      
+      // Reset new button
+      if (newButton) {
+        newButton.innerHTML = '<span class="material-icons">add</span> NEW';
+        newButton.disabled = false;
+      }
+      
+      // Reset folder input
+      document.getElementById('folder-input').value = '';
     }
 
     // File rename functionality
@@ -1731,15 +1847,19 @@
     }
 
     function navigateToFolder(folderId, folderName) {
+      console.log('Navigating to folder:', { folderId, folderName, currentFolderBefore: currentFolder });
       folderStack.push({ id: currentFolder, name: document.getElementById('page-title').textContent });
       currentFolder = folderId;
+      console.log('currentFolder set to:', currentFolder);
       document.getElementById('page-title').textContent = folderName;
       updateBreadcrumb();
       loadUserFiles();
     }
 
     function goToRoot() {
+      console.log('Going to root, currentFolderBefore:', currentFolder);
       currentFolder = 'root';
+      console.log('currentFolder set to:', currentFolder);
       folderStack = [];
       document.getElementById('page-title').textContent = 'My Files';
       updateBreadcrumb();
@@ -1835,6 +1955,9 @@
       
       // Send current folder as parentFolder - make sure this matches backend expectation
       const parentFolder = currentFolder === 'root' ? '' : currentFolder;
+      
+      console.log('File upload - currentFolder:', currentFolder, 'parentFolder to send:', parentFolder);
+      
       if (parentFolder) {
         formData.append('parentFolder', parentFolder);
       }
@@ -2057,9 +2180,38 @@
     }
 
     // Move modal functions
-    function showMoveModal() {
+    async function showMoveModal() {
       document.getElementById('move-modal').classList.add('show');
-      document.getElementById('move-target-folder').value = '';
+      
+      // Load available folders
+      try {
+        const token = localStorage.getItem('token');
+        const response = await fetch(`${API_BASE_URL}/files`, {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          }
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+          const select = document.getElementById('move-target-folder');
+          // Clear existing options except the first one
+          select.innerHTML = '<option value="">My Files (Root)</option>';
+          
+          // Get all folders recursively
+          const folders = data.files.filter(f => f.isFolder);
+          folders.forEach(folder => {
+            const option = document.createElement('option');
+            option.value = folder.id;
+            option.textContent = folder.name;
+            select.appendChild(option);
+          });
+        }
+      } catch (error) {
+        console.error('Error loading folders:', error);
+      }
     }
 
     function closeMoveModal() {
@@ -2330,23 +2482,35 @@
         }
 
         const data = await response.json();
+        console.log('Storage overview response:', data);
         
-        if (data.success) {
+        if (data.success && data.overview) {
           const overview = data.overview;
-          const totalSizeGB = overview.total.used / (1024 * 1024 * 1024);
+          const usedBytes = overview.total?.used ?? 0;
+          const totalSizeGB = usedBytes / (1024 * 1024 * 1024);
           const maxStorageGB = 15;
           const usagePercentage = Math.min((totalSizeGB / maxStorageGB) * 100, 100);
+          
+          console.log('Storage calculation:', {
+            usedBytes: usedBytes,
+            usedGB: totalSizeGB,
+            maxGB: maxStorageGB,
+            percentage: usagePercentage
+          });
           
           const progressFill = document.getElementById('storage-progress');
           const usageText = document.getElementById('storage-text');
           
           if (progressFill) {
+            console.log('Setting progress bar to:', usagePercentage + '%');
             progressFill.style.width = `${usagePercentage}%`;
           }
           
           if (usageText) {
             usageText.textContent = `${totalSizeGB.toFixed(2)} GB of ${maxStorageGB} GB used`;
           }
+        } else {
+          console.warn('Invalid storage overview response:', data);
         }
       } catch (error) {
         console.error('Error updating storage usage:', error);
@@ -2366,13 +2530,21 @@
     function formatDate(dateString) {
       const date = new Date(dateString);
       const now = new Date();
-      const diffTime = Math.abs(now - date);
-      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
       
-      if (diffDays === 1) {
+      // Reset time components to compare dates only
+      const dateOnly = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+      const nowOnly = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      
+      const diffTime = nowOnly - dateOnly;
+      const diffDays = diffTime / (1000 * 60 * 60 * 24);
+      
+      if (diffDays === 0) {
+        // Same day - show time
+        return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      } else if (diffDays === 1) {
         return 'Yesterday';
       } else if (diffDays < 7) {
-        return `${diffDays} days ago`;
+        return `${Math.floor(diffDays)} days ago`;
       } else {
         return date.toLocaleDateString();
       }

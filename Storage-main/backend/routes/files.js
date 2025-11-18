@@ -84,9 +84,11 @@ router.get('/', authMiddleware, async (req, res) => {
       inTrash: false 
     };
 
+    // Default to root folder if no folder specified
     if (folder && folder !== 'root') {
       query.parentFolder = folder;
-    } else if (folder === 'root') {
+    } else {
+      // Default to root - show files with no parent folder
       query.parentFolder = null;
     }
 
@@ -265,6 +267,10 @@ router.post('/upload', authMiddleware, upload.single('file'), async (req, res) =
     if (parentFolder === '' || parentFolder === 'root') {
       parentFolder = null;
     }
+    // Also normalize undefined to null so Mongoose will use the schema default
+    if (typeof parentFolder === 'undefined') {
+      parentFolder = null;
+    }
 
     // Check if parent folder exists and belongs to user
     if (parentFolder) {
@@ -294,6 +300,34 @@ router.post('/upload', authMiddleware, upload.single('file'), async (req, res) =
     }
 
     const fileType = getFileTypeFromMime(mimetype);
+    // Duplicate detection: avoid creating duplicate DB entries for same user/name/size in same folder
+    const existingSame = await File.findOne({
+      userId: req.user._id,
+      originalName: originalname,
+      size: size,
+      parentFolder: parentFolder,
+      inTrash: false
+    });
+
+    if (existingSame) {
+      console.log('Duplicate detected for upload (single) - skipping DB save:', originalname, 'user:', req.user._id.toString(), 'parentFolder:', parentFolder);
+
+      // Update storage stats and activity but don't create a duplicate file entry
+      await StorageStats.updateUserStats(req.user._id);
+
+      return res.status(200).json({
+        success: true,
+        message: 'File already exists, skipped duplicate',
+        file: {
+          id: existingSame._id,
+          name: existingSame.name,
+          type: existingSame.type,
+          size: existingSame.size,
+          uploadDate: existingSame.createdAt,
+          parentFolder: existingSame.parentFolder
+        }
+      });
+    }
 
     const newFile = new File({
       name: originalname,
@@ -356,7 +390,7 @@ router.post('/upload', authMiddleware, upload.single('file'), async (req, res) =
   }
 });
 
-// Upload multiple files - UPDATED: Respects parentFolder
+// Upload multiple files with folder structure support
 router.post('/upload-multiple', authMiddleware, upload.array('files', 50), async (req, res) => {
   try {
     if (!req.files || req.files.length === 0) {
@@ -366,14 +400,27 @@ router.post('/upload-multiple', authMiddleware, upload.array('files', 50), async
       });
     }
 
-    let { parentFolder } = req.body;
+    let { parentFolder, isFolder, folderStructure, filePaths } = req.body;
+    
+    console.log('Upload-multiple request:', {
+      filesCount: req.files.length,
+      parentFolder: parentFolder,
+      isFolder: isFolder,
+      filePaths: filePaths ? (Array.isArray(filePaths) ? filePaths.length : 'string') : undefined
+    });
     
     if (parentFolder === '' || parentFolder === 'root') {
+      parentFolder = null;
+    }
+    // Normalize when parentFolder not provided in the form (undefined)
+    if (typeof parentFolder === 'undefined') {
       parentFolder = null;
     }
 
     // Check if parent folder exists and belongs to user
     if (parentFolder) {
+      console.log('Checking parent folder:', parentFolder);
+      
       const parentFolderDoc = await File.findOne({
         _id: parentFolder,
         userId: req.user._id,
@@ -382,6 +429,7 @@ router.post('/upload-multiple', authMiddleware, upload.array('files', 50), async
       });
       
       if (!parentFolderDoc) {
+        console.log('Parent folder not found or access denied');
         req.files.forEach(file => {
           if (fs.existsSync(file.path)) {
             fs.unlinkSync(file.path);
@@ -414,9 +462,134 @@ router.post('/upload-multiple', authMiddleware, upload.array('files', 50), async
       });
     }
 
-    for (const file of req.files) {
+    // If this is a folder upload, parse the file paths and create folder structure
+    let folderMap = {}; // Map of folder paths to folder IDs
+    
+    if (isFolder === 'true' && filePaths) {
+      const filePathArray = Array.isArray(filePaths) ? filePaths : [filePaths];
+      
+      // Create all necessary folders first
+      for (const filePath of filePathArray) {
+        const pathParts = filePath.split('/');
+        
+        // Create folders for all intermediate directories
+        let currentParent = parentFolder;
+        let currentPath = '';
+        
+        for (let i = 0; i < pathParts.length - 1; i++) {
+          const folderName = pathParts[i];
+          currentPath += (currentPath ? '/' : '') + folderName;
+          
+          // Check if we've already created this folder in this upload
+          if (!folderMap[currentPath]) {
+            // Check if folder already exists
+            const existingFolder = await File.findOne({
+              name: folderName,
+              userId: req.user._id,
+              parentFolder: currentParent,
+              isFolder: true,
+              inTrash: false
+            });
+            
+            if (existingFolder) {
+              folderMap[currentPath] = existingFolder._id;
+              currentParent = existingFolder._id;
+            } else {
+              // Create new folder
+              const newFolder = new File({
+                name: folderName,
+                userId: req.user._id,
+                parentFolder: currentParent,
+                isFolder: true,
+                type: 'folder',
+                size: 0,
+                path: null,
+                metadata: new Map([['createdBy', 'folderUpload']])
+              });
+              
+              await newFolder.save();
+              folderMap[currentPath] = newFolder._id;
+              currentParent = newFolder._id;
+              
+              console.log(`Created folder: ${folderName} with parent: ${currentParent}`);
+            }
+          } else {
+            currentParent = folderMap[currentPath];
+          }
+        }
+      }
+    }
+
+    // Now upload all files with proper parent folders
+    for (let i = 0; i < req.files.length; i++) {
+      const file = req.files[i];
       const { originalname, mimetype, size, filename, path: filePath } = file;
+      
+      let fileParentFolder = parentFolder;
+      if (typeof fileParentFolder === 'undefined') {
+        fileParentFolder = null;
+      }
+      
+      // If folder upload, determine the correct parent folder from the file path
+      if (isFolder === 'true' && filePaths) {
+        const filePathArray = Array.isArray(filePaths) ? filePaths : [filePaths];
+        const uploadFilePath = filePathArray[i];
+        const pathParts = uploadFilePath.split('/');
+        
+        console.log(`Processing file ${i}: ${uploadFilePath}, pathParts:`, pathParts);
+        
+        // Build the path to the parent folder
+        if (pathParts.length > 1) {
+          let currentPath = '';
+          for (let j = 0; j < pathParts.length - 1; j++) {
+            currentPath += (currentPath ? '/' : '') + pathParts[j];
+            if (folderMap[currentPath]) {
+              fileParentFolder = folderMap[currentPath];
+              console.log(`  -> Set fileParentFolder to ${fileParentFolder} for path ${currentPath}`);
+            }
+          }
+        }
+      }
+      
       const fileType = getFileTypeFromMime(mimetype);
+
+      console.log(`Saving file: ${originalname}, parentFolder: ${fileParentFolder}`);
+
+      // Duplicate detection per-file: same originalName, size, user, and parentFolder
+      const existingSame = await File.findOne({
+        userId: req.user._id,
+        originalName: originalname,
+        size: size,
+        parentFolder: fileParentFolder,
+        inTrash: false
+      });
+
+      if (existingSame) {
+        console.log('Duplicate detected for upload-multiple - skipping DB save for', originalname, 'parentFolder:', fileParentFolder);
+        // Add to uploadedFiles response using existing doc
+        uploadedFiles.push({
+          id: existingSame._id,
+          name: existingSame.name,
+          type: existingSame.type,
+          size: existingSame.size,
+          uploadDate: existingSame.createdAt,
+          uploader: req.user.username,
+          uploaderEmail: req.user.email,
+          url: `/api/files/${existingSame._id}/download`,
+          parentFolder: existingSame.parentFolder
+        });
+
+        // Still log activity for completeness
+        await Activity.logActivity({
+          type: 'upload_skipped_duplicate',
+          fileId: existingSame._id,
+          fileName: originalname,
+          userId: req.user._id,
+          details: new Map([['reason', 'duplicate_detected'], ['parentFolder', fileParentFolder || 'root']])
+        });
+
+        continue; // Skip creating a new File document
+      }
 
       const newFile = new File({
         name: originalname,
@@ -425,7 +598,7 @@ router.post('/upload-multiple', authMiddleware, upload.array('files', 50), async
         size: size,
         path: filePath,
         userId: req.user._id,
-        parentFolder: parentFolder, // All files go to the specified folder
+        parentFolder: fileParentFolder,
         isFolder: false,
         metadata: new Map([['uploadMethod', 'multer'], ['mimetype', mimetype]])
       });
@@ -453,7 +626,7 @@ router.post('/upload-multiple', authMiddleware, upload.array('files', 50), async
         details: new Map([
           ['size', size.toString()], 
           ['type', fileType], 
-          ['parentFolder', parentFolder || 'root']
+          ['parentFolder', fileParentFolder || 'root']
         ])
       });
     }
@@ -492,13 +665,17 @@ router.post('/upload-multiple', authMiddleware, upload.array('files', 50), async
 router.get('/recent', authMiddleware, async (req, res) => {
   try {
     const { limit = 20 } = req.query;
-    
+    console.log('GET /files/recent called by user:', req.user ? req.user._id.toString() : 'unknown');
+
     const activities = await Activity.find({ userId: req.user._id })
       .sort({ createdAt: -1 })
       .limit(parseInt(limit))
       .populate('fileId', 'name type parentFolder')
       .populate('targetUserId', 'username email')
       .lean();
+
+    console.log('Found activities count:', activities.length);
+    console.log('Activity ids:', activities.map(a => a._id.toString()).slice(0,10));
 
     const formattedActivities = activities.map(activity => ({
       id: activity._id,
@@ -520,6 +697,18 @@ router.get('/recent', authMiddleware, async (req, res) => {
       success: false,
       error: 'Server error while fetching recent activities'
     });
+  }
+});
+
+// Debug endpoint: return raw activity documents for current user (dev only)
+router.get('/debug/activities', authMiddleware, async (req, res) => {
+  try {
+    const activities = await Activity.find({ userId: req.user._id }).sort({ createdAt: -1 }).limit(100).lean();
+    console.log(`Debug activities for user ${req.user._id.toString()}: ${activities.length}`);
+    return res.json({ success: true, activities });
+  } catch (error) {
+    console.error('Debug activities error:', error);
+    return res.status(500).json({ success: false, error: 'Server error' });
   }
 });
 
@@ -667,7 +856,7 @@ router.patch('/:fileId/rename', authMiddleware, async (req, res) => {
 router.post('/:fileId/move', authMiddleware, async (req, res) => {
   try {
     const { fileId } = req.params;
-    let { targetFolderId } = req.body;
+    let { targetFolderId, targetFolderName } = req.body;
 
     const file = await File.findOne({ _id: fileId, userId: req.user._id });
     if (!file) {
@@ -675,6 +864,25 @@ router.post('/:fileId/move', authMiddleware, async (req, res) => {
         success: false,
         error: 'File not found'
       });
+    }
+
+    // If folder name is provided instead of ID, find the folder ID
+    if (targetFolderName && !targetFolderId) {
+      const targetFolder = await File.findOne({
+        name: targetFolderName,
+        userId: req.user._id,
+        isFolder: true,
+        inTrash: false
+      });
+      
+      if (targetFolder) {
+        targetFolderId = targetFolder._id;
+      } else {
+        return res.status(404).json({
+          success: false,
+          error: `Folder "${targetFolderName}" not found`
+        });
+      }
     }
 
     if (targetFolderId === '' || targetFolderId === 'root') {
@@ -1249,34 +1457,36 @@ router.get('/:fileId/info', authMiddleware, async (req, res) => {
 // Get storage overview
 router.get('/storage/overview', authMiddleware, async (req, res) => {
   try {
-    const storageStats = await StorageStats.findOne({ userId: req.user._id });
+    let storageStats = await StorageStats.findOne({ userId: req.user._id });
     
+    // If no stats exist, calculate them
     if (!storageStats) {
-      const newStats = await StorageStats.updateUserStats(req.user._id);
-      return res.json({
-        success: true,
-        overview: {
-          total: {
-            used: 0,
-            available: 16106127360,
-            fileCount: 0,
-            folderCount: 0
-          },
-          byType: {}
-        }
-      });
+      console.log('No storage stats found for user, calculating...');
+      storageStats = await StorageStats.updateUserStats(req.user._id);
     }
+
+    // Ensure we have all the required fields
+    const usedStorage = storageStats.usedStorage || 0;
+    
+    console.log('Storage stats response:', {
+      userId: req.user._id.toString(),
+      usedStorage: usedStorage,
+      totalFiles: storageStats.totalFiles || 0,
+      totalFolders: storageStats.totalFolders || 0,
+      hasUsedStorage: storageStats.hasOwnProperty('usedStorage'),
+      storageStatsKeys: Object.keys(storageStats.toObject?.() || {})
+    });
 
     res.json({
       success: true,
       overview: {
         total: {
-          used: storageStats.usedStorage,
+          used: usedStorage,
           available: 16106127360,
-          fileCount: storageStats.totalFiles,
-          folderCount: storageStats.totalFolders
+          fileCount: storageStats.totalFiles || 0,
+          folderCount: storageStats.totalFolders || 0
         },
-        byType: storageStats.fileTypeBreakdown
+        byType: storageStats.fileTypeBreakdown || {}
       }
     });
   } catch (error) {
@@ -1319,6 +1529,15 @@ function getFileTypeFromMime(mimeType) {
 }
 
 function getActivityDescription(activity) {
+  // Helper to read details whether stored as a Map (with .get) or plain object
+  function getDetail(key) {
+    if (!activity.details) return undefined;
+    if (typeof activity.details.get === 'function') {
+      return activity.details.get(key);
+    }
+    return activity.details[key];
+  }
+
   const descriptions = {
     upload: `You uploaded ${activity.fileName}`,
     download: `You downloaded ${activity.fileName}`,
@@ -1331,8 +1550,9 @@ function getActivityDescription(activity) {
     create_folder: `You created folder ${activity.fileName}`,
     copy: `You copied ${activity.fileName}`,
     permanent_delete: `You permanently deleted ${activity.fileName}`,
-    empty_trash: `You emptied trash (${activity.details?.get('count') || 'multiple'} files)`
+    empty_trash: `You emptied trash (${getDetail('count') || 'multiple'} files)`
   };
+
   return descriptions[activity.type] || `You performed ${activity.type} on ${activity.fileName}`;
 }
 

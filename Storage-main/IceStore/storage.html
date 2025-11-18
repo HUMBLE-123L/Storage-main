@@ -115,6 +115,7 @@
 
     .sidebar-progress-fill {
       height: 100%;
+      width: 0%;
       background: linear-gradient(90deg, #00BFFF, #4DEEE8);
       border-radius: 3px;
       transition: width 0.5s ease;
@@ -625,8 +626,13 @@
             <div class="progress-fill" id="total-progress" style="width: 0%; background: linear-gradient(90deg, #00BFFF, #4DEEE8);"></div>
           </div>
           <div class="progress-details">
-            <span id="used-storage">0 GB</span>
-            <span id="total-storage">15 GB</span>
+            <div style="display: flex; justify-content: space-between; width: 100%;">
+              <span>Used: <strong id="used-storage">0 GB</strong></span>
+              <span>Available: <strong id="available-storage">15 GB</strong></span>
+            </div>
+          </div>
+          <div style="text-align: center; margin-top: 8px; color: #ccc; font-size: 0.9em;">
+            <span id="total-storage-label">Total: 15 GB</span>
           </div>
         </div>
         <div class="storage-stats">
@@ -948,7 +954,8 @@
       // Update total storage
       const totalProgress = document.getElementById('total-progress');
       const usedStorage = document.getElementById('used-storage');
-      const totalStorage = document.getElementById('total-storage');
+      const availableStorage = document.getElementById('available-storage');
+      const totalStorageLabel = document.getElementById('total-storage-label');
       const fileCount = document.getElementById('file-count');
       const folderCount = document.getElementById('folder-count');
       const totalItems = document.getElementById('total-items');
@@ -956,12 +963,14 @@
       
       const usedStorageGB = storageOverview.total.used / (1024 * 1024 * 1024);
       const totalStorageGB = storageOverview.total.total / (1024 * 1024 * 1024);
+      const availableStorageGB = totalStorageGB - usedStorageGB;
       const usagePercent = Math.min((usedStorageGB / totalStorageGB) * 100, 100);
       const totalItemsCount = (storageOverview.total.files || 0) + (storageOverview.total.folders || 0);
       
       if (totalProgress) totalProgress.style.width = `${usagePercent}%`;
       if (usedStorage) usedStorage.textContent = `${usedStorageGB.toFixed(2)} GB`;
-      if (totalStorage) totalStorage.textContent = `${totalStorageGB} GB`;
+      if (availableStorage) availableStorage.textContent = `${availableStorageGB.toFixed(2)} GB`;
+      if (totalStorageLabel) totalStorageLabel.textContent = `Total: ${totalStorageGB.toFixed(0)} GB`;
       if (fileCount) fileCount.textContent = storageOverview.total.files || 0;
       if (folderCount) folderCount.textContent = storageOverview.total.folders || 0;
       if (totalItems) totalItems.textContent = totalItemsCount;
@@ -985,7 +994,7 @@
       hideError();
       
       // Show debug info in development
-      showDebugInfo(`Storage calculated: ${usedStorageGB.toFixed(2)}GB used of ${totalStorageGB}GB total`);
+      showDebugInfo(`Storage: ${usedStorageGB.toFixed(2)}GB used, ${availableStorageGB.toFixed(2)}GB available, ${totalStorageGB.toFixed(0)}GB total`);
     }
 
     function displayFileTypeBreakdown() {
@@ -1142,6 +1151,7 @@
       
       const usedStorageGB = storageOverview.total.used / (1024 * 1024 * 1024);
       const totalStorageGB = storageOverview.total.total / (1024 * 1024 * 1024);
+      const availableStorageGB = totalStorageGB - usedStorageGB;
       const usagePercentage = Math.min((usedStorageGB / totalStorageGB) * 100, 100);
       
       const progressFill = document.getElementById('storage-progress');
@@ -1152,7 +1162,7 @@
       }
       
       if (usageText) {
-        usageText.textContent = `${usedStorageGB.toFixed(2)} GB of ${totalStorageGB} GB used`;
+        usageText.textContent = `${usedStorageGB.toFixed(2)} GB used, ${availableStorageGB.toFixed(2)} GB available of ${totalStorageGB.toFixed(0)} GB`;
       }
     }
 

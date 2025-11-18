@@ -115,6 +115,7 @@
 
     .sidebar-progress-fill {
       height: 100%;
+      width: 0%;
       background: linear-gradient(90deg, #00BFFF, #4DEEE8);
       border-radius: 3px;
       transition: width 0.5s ease;
@@ -650,65 +651,22 @@
           recentActivities = data.activities || [];
           console.log('Loaded recent activities:', recentActivities);
           
-          // If no activities from backend, show demo data for testing
-          if (recentActivities.length === 0) {
-            recentActivities = generateDemoActivities();
-            console.log('Using demo activities:', recentActivities);
-          }
-          
-          displayRecentActivities();
+            // If no activities from backend, leave list empty (no demo/fake data)
+            displayRecentActivities();
         } else {
           throw new Error(data.error || 'Failed to load recent activities');
         }
       } catch (error) {
         console.error('Error loading recent activities:', error);
-        // Fallback to demo data for testing
-        recentActivities = generateDemoActivities();
+        // Do not show demo data — show empty recent activity
+        recentActivities = [];
         displayRecentActivities();
-        showNotification('Using demo data - backend connection issue', 'info');
+        showNotification('Unable to load recent activities from server', 'error');
       } finally {
         showLoading(false);
       }
     }
-
-    function generateDemoActivities() {
-      const demoActivities = [
-        {
-          id: 'activity_1',
-          type: 'upload',
-          fileName: 'Project Report.pdf',
-          description: 'You uploaded Project Report.pdf',
-          timestamp: new Date(Date.now() - 2 * 60 * 60 * 1000), // 2 hours ago
-          file: { id: 'file_1' }
-        },
-        {
-          id: 'activity_2',
-          type: 'download',
-          fileName: 'Team Photos.zip',
-          description: 'You downloaded Team Photos.zip',
-          timestamp: new Date(Date.now() - 5 * 60 * 60 * 1000), // 5 hours ago
-          file: { id: 'file_2' }
-        },
-        {
-          id: 'activity_3',
-          type: 'share',
-          fileName: 'Financial Data.xlsx',
-          description: 'You shared Financial Data.xlsx with john@example.com',
-          timestamp: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000), // 1 day ago
-          file: { id: 'file_3' }
-        },
-        {
-          id: 'activity_4',
-          type: 'view',
-          fileName: 'Meeting Notes.docx',
-          description: 'You viewed Meeting Notes.docx',
-          timestamp: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000), // 2 days ago
-          file: { id: 'file_4' }
-        }
-      ];
-      
-      return demoActivities;
-    }
+    
 
     function displayRecentActivities() {
       const container = document.getElementById('activity-list');
