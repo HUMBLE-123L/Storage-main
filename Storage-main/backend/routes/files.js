@@ -8,7 +8,9 @@ const File = require('../models/File');
 const Activity = require('../models/Activity');
 const StorageStats = require('../models/StorageStats');
 const User = require('../models/User');
+const Notification = require('../models/Notification');
 const { authMiddleware } = require('../middleware/auth');
+const { notifyFileOperation, shouldSendNotification } = require('../utils/notificationHelper');
 const router = express.Router();
 
 // Configure multer for file uploads
@@ -219,6 +221,11 @@ router.post('/folders', authMiddleware, async (req, res) => {
 
     await newFolder.save();
 
+    // Create notification for folder creation
+    if (await shouldSendNotification(req.user._id, 'file_uploaded')) {
+      await notifyFileOperation('file_uploaded', newFolder, req.user);
+    }
+
     await Activity.logActivity({
       type: 'create_folder',
       fileId: newFolder._id,
@@ -344,6 +351,11 @@ router.post('/upload', authMiddleware, upload.single('file'), async (req, res) =
     await newFile.save();
 
     await StorageStats.updateUserStats(req.user._id);
+
+    // Create notification for file upload
+    if (await shouldSendNotification(req.user._id, 'file_uploaded')) {
+      await notifyFileOperation('file_uploaded', newFile, req.user);
+    }
 
     await Activity.logActivity({
       type: 'upload',
@@ -605,6 +617,11 @@ router.post('/upload-multiple', authMiddleware, upload.array('files', 50), async
 
       await newFile.save();
       totalSize += size;
+
+      // Create notification for file upload
+      if (await shouldSendNotification(req.user._id, 'file_uploaded')) {
+        await notifyFileOperation('file_uploaded', newFile, req.user);
+      }
 
       uploadedFiles.push({
         id: newFile._id,
@@ -940,6 +957,11 @@ router.patch('/:fileId/rename', authMiddleware, async (req, res) => {
 
     await file.save();
 
+    // Create notification for file rename
+    await notifyFileOperation('file_renamed', file, req.user, [], {
+      oldName: oldName
+    });
+
     await Activity.logActivity({
       type: 'rename',
       fileId: file._id,
@@ -1043,6 +1065,9 @@ router.post('/:fileId/move', authMiddleware, async (req, res) => {
 
     await file.save();
 
+    // Create notification for file move
+    await notifyFileOperation('file_moved', file, req.user);
+
     await Activity.logActivity({
       type: 'move',
       fileId: file._id,
@@ -1110,6 +1135,11 @@ router.post('/:fileId/copy', authMiddleware, async (req, res) => {
     });
 
     await fileCopy.save();
+
+    // Create notification for file copy
+    if (await shouldSendNotification(req.user._id, 'file_uploaded')) {
+      await notifyFileOperation('file_uploaded', fileCopy, req.user);
+    }
 
     await Activity.logActivity({
       type: 'copy',
@@ -1341,6 +1371,11 @@ router.post('/:fileId/share', authMiddleware, async (req, res) => {
 
     await file.save();
 
+    // Create notification for the target user
+    if (await shouldSendNotification(targetUser._id, 'file_shared')) {
+      await notifyFileOperation('file_shared', file, req.user, [targetUser._id]);
+    }
+
     // Log activity
     await Activity.logActivity({
       type: 'share',
@@ -1460,6 +1495,9 @@ router.post('/:fileId/trash', authMiddleware, async (req, res) => {
 
     await StorageStats.updateUserStats(req.user._id);
 
+    // Create notification for file deletion
+    await notifyFileOperation('file_deleted', file, req.user);
+
     await Activity.logActivity({
       type: 'delete',
       fileId: file._id,
@@ -1500,6 +1538,11 @@ router.post('/:fileId/restore', authMiddleware, async (req, res) => {
     await file.save();
 
     await StorageStats.updateUserStats(req.user._id);
+
+    // Create notification for file restore
+    if (await shouldSendNotification(req.user._id, 'file_uploaded')) {
+      await notifyFileOperation('file_uploaded', file, req.user);
+    }
 
     await Activity.logActivity({
       type: 'restore',
