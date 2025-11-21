@@ -7,6 +7,7 @@ const path = require('path');
 const authRoutes = require('./routes/auth');
 const fileRoutes = require('./routes/files');
 const storageRoutes = require('./routes/storage');
+const Notification = require('./routes/notifications');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -23,6 +24,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use('/api/auth', authRoutes);
 app.use('/api/files', fileRoutes);
 app.use('/api/storage', storageRoutes);
+app.use('/api/notifications', Notification);
 
 // Serve static files in production
 if (process.env.NODE_ENV === 'production') {
