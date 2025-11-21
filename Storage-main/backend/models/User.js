@@ -21,7 +21,59 @@ const userSchema = new mongoose.Schema({
     type: String, 
     required: true 
   },
+  profile: {
+    firstName: {
+      type: String,
+      trim: true,
+      maxlength: 50,
+      default: ''
+    },
+    lastName: {
+      type: String,
+      trim: true,
+      maxlength: 50,
+      default: ''
+    },
+    bio: {
+      type: String,
+      maxlength: 500,
+      default: ''
+    },
+    avatar: {
+      type: String,
+      default: null
+    },
+    location: {
+      type: String,
+      maxlength: 100,
+      default: ''
+    },
+    website: {
+      type: String,
+      trim: true,
+      maxlength: 200,
+      default: ''
+    }
+  },
+  notifications: {
+    sharedFiles: {
+      type: Boolean,
+      default: true
+    },
+    fileUpdates: {
+      type: Boolean,
+      default: true
+    },
+    emailNotifications: {
+      type: Boolean,
+      default: true
+    }
+  },
   createdAt: { 
+    type: Date, 
+    default: Date.now 
+  },
+  updatedAt: { 
     type: Date, 
     default: Date.now 
   }
@@ -40,10 +92,16 @@ userSchema.pre('save', async function(next) {
   }
 });
 
+// Update updatedAt before saving
+userSchema.pre('save', function(next) {
+  this.updatedAt = Date.now();
+  next();
+});
+
 // Compare password method
 userSchema.methods.comparePassword = async function(candidatePassword) {
   return await bcrypt.compare(candidatePassword, this.password);
 };
 
-// ✅ Prevent OverwriteModelError
+// Prevent OverwriteModelError
 module.exports = mongoose.models.User || mongoose.model('User', userSchema);
