@@ -959,7 +959,15 @@
     
     <div class="sidebar-usage-info">
       <div class="sidebar-progress-bar">
-        <div class="sidebar-progress-fill" id="storage-progress"></div>
+        <div 
+          class="sidebar-progress-fill" 
+          id="storage-progress"
+          role="progressbar"
+          aria-valuemin="0"
+          aria-valuemax="100"
+          aria-valuenow="0"
+          title="Storage usage"
+        ></div>
       </div>
       <p style="margin: 0; color: #ccc; font-size: 0.9em;" id="storage-text">0.00 GB of 15 GB used</p>
       <button class="storage-btn" onclick="window.location.href='storage.html'">Get more storage</button>
@@ -2493,43 +2501,92 @@
           }
         });
 
-        if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
-        }
+        let usedBytes = 0;
+        const maxStorageGB = 15;
+        const maxStorageBytes = maxStorageGB * 1024 * 1024 * 1024;
 
-        const data = await response.json();
-        console.log('Storage overview response:', data);
-        
-        if (data.success && data.overview) {
-          const overview = data.overview;
-          const usedBytes = overview.total?.used ?? 0;
-          const totalSizeGB = usedBytes / (1024 * 1024 * 1024);
-          const maxStorageGB = 15;
-          const usagePercentage = Math.min((totalSizeGB / maxStorageGB) * 100, 100);
-          
-          console.log('Storage calculation:', {
-            usedBytes: usedBytes,
-            usedGB: totalSizeGB,
-            maxGB: maxStorageGB,
-            percentage: usagePercentage
-          });
-          
-          const progressFill = document.getElementById('storage-progress');
-          const usageText = document.getElementById('storage-text');
-          
-          if (progressFill) {
-            console.log('Setting progress bar to:', usagePercentage + '%');
-            progressFill.style.width = `${usagePercentage}%`;
-          }
-          
-          if (usageText) {
-            usageText.textContent = `${totalSizeGB.toFixed(2)} GB of ${maxStorageGB} GB used`;
+        if (response.ok) {
+          const data = await response.json();
+          console.log('Storage overview response:', data);
+
+          // Try several common response shapes
+          if (data.overview && data.overview.total && typeof data.overview.total.used === 'number') {
+            usedBytes = data.overview.total.used;
+          } else if (data.overview && typeof data.overview.used === 'number') {
+            usedBytes = data.overview.used;
+          } else if (typeof data.usedBytes === 'number') {
+            usedBytes = data.usedBytes;
+          } else if (typeof data.used === 'number') {
+            usedBytes = data.used;
+          } else if (data.success && data.overview && typeof data.overview.totalUsed === 'number') {
+            usedBytes = data.overview.totalUsed;
+          } else {
+            console.warn('Unexpected storage overview shape, falling back to local calculation');
           }
         } else {
-          console.warn('Invalid storage overview response:', data);
+          console.warn('Storage overview fetch failed with status', response.status, '— falling back to local calculation');
+        }
+
+        // If we couldn't obtain usedBytes from server, compute from loaded userFiles
+        if (!usedBytes || usedBytes === 0) {
+          try {
+            usedBytes = (userFiles || []).reduce((acc, f) => {
+              // only count file sizes (skip folders)
+              return acc + (f && !f.isFolder ? (parseInt(f.size, 10) || 0) : 0);
+            }, 0);
+          } catch (e) {
+            console.warn('Local storage fallback failed', e);
+            usedBytes = 0;
+          }
+        }
+
+        const usedGB = usedBytes / (1024 * 1024 * 1024);
+        const usagePercentage = Math.min((usedBytes / maxStorageBytes) * 100, 100);
+
+        console.log('Storage calculation:', {
+          usedBytes,
+          usedGB,
+          maxStorageGB,
+          usagePercentage
+        });
+
+        const progressFill = document.getElementById('storage-progress');
+        const usageText = document.getElementById('storage-text');
+
+        if (progressFill) {
+          progressFill.style.width = `${usagePercentage}%`;
+          progressFill.setAttribute('aria-valuenow', usagePercentage.toFixed(2));
+          progressFill.title = `${usedGB.toFixed(2)} GB of ${maxStorageGB} GB used`;
+        }
+
+        if (usageText) {
+          usageText.textContent = `${usedGB.toFixed(2)} GB of ${maxStorageGB} GB used`;
         }
       } catch (error) {
         console.error('Error updating storage usage:', error);
+
+        // fallback: compute from local file list
+        try {
+          const usedBytes = (userFiles || []).reduce((acc, f) => acc + (f && !f.isFolder ? (parseInt(f.size, 10) || 0) : 0), 0);
+          const usedGB = usedBytes / (1024 * 1024 * 1024);
+          const maxStorageGB = 15;
+          const usagePercentage = Math.min((usedBytes / (maxStorageGB * 1024 * 1024 * 1024)) * 100, 100);
+
+          const progressFill = document.getElementById('storage-progress');
+          const usageText = document.getElementById('storage-text');
+
+          if (progressFill) {
+            progressFill.style.width = `${usagePercentage}%`;
+            progressFill.setAttribute('aria-valuenow', usagePercentage.toFixed(2));
+            progressFill.title = `${usedGB.toFixed(2)} GB of ${maxStorageGB} GB used`;
+          }
+
+          if (usageText) {
+            usageText.textContent = `${usedGB.toFixed(2)} GB of ${maxStorageGB} GB used`;
+          }
+        } catch (e) {
+          console.error('Fallback storage calculation failed', e);
+        }
       }
     }
 

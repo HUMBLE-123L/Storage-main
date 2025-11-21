@@ -942,41 +942,115 @@
 
     async function downloadSharedFile(file) {
       try {
-        const token = localStorage.getItem('token');
-        const response = await fetch(`${API_BASE_URL}/files/${file.id}/download`, {
-          method: 'GET',
-          headers: {
-            'Authorization': `Bearer ${token}`
-          }
-        });
+        console.log('Attempting download for shared file object:', file);
 
-        if (!response.ok) {
-          // try to read JSON error message if available
-          let msg = `Download failed: ${response.status}`;
+        const token = localStorage.getItem('token');
+        const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+
+        // If this entry is a folder, try folder-specific endpoints first and handle server refusal clearly
+        const isFolder = file.isFolder || file.type === 'folder';
+
+        const endpoints = [];
+
+        // Use explicit URLs if server returned them
+        if (file.downloadUrl) endpoints.push(file.downloadUrl);
+        if (file.downloadURL) endpoints.push(file.downloadURL);
+        if (file.url) endpoints.push(file.url);
+        if (file.sharedUrl) endpoints.push(file.sharedUrl);
+
+        // If it's a folder, try likely folder download routes / zip variants first
+        if (isFolder) {
+          endpoints.push(`${API_BASE_URL}/files/${file.id}/download?zip=true`);
+          endpoints.push(`${API_BASE_URL}/files/${file.id}/download?archive=zip`);
+          endpoints.push(`${API_BASE_URL}/files/${file.id}/download?compress=true`);
+          endpoints.push(`${API_BASE_URL}/folders/${file.id}/download`);
+          endpoints.push(`${API_BASE_URL}/folders/${file.id}/zip`);
+          endpoints.push(`${API_BASE_URL}/download/folders/${file.id}`);
+        }
+
+        // If share-specific fields exist, include those shapes
+        if (file.shareId) {
+          endpoints.push(`${API_BASE_URL}/shares/${file.shareId}/download`);
+          endpoints.push(`${API_BASE_URL}/shares/${file.shareId}`);
+        }
+
+        if (file.shareToken) {
+          endpoints.push(`${API_BASE_URL}/files/${file.id}/download?shareToken=${encodeURIComponent(file.shareToken)}`);
+          endpoints.push(`${API_BASE_URL}/files/${file.id}?shareToken=${encodeURIComponent(file.shareToken)}`);
+          endpoints.push(`${API_BASE_URL}/files/${file.id}/download?token=${encodeURIComponent(file.shareToken)}`);
+        }
+
+        // Generic fallbacks for files
+        endpoints.push(`${API_BASE_URL}/files/${file.id}/download`);
+        endpoints.push(`${API_BASE_URL}/files/${file.id}`);
+        endpoints.push(`${API_BASE_URL}/files/shared/${file.id}/download`);
+        endpoints.push(`${API_BASE_URL}/shares/download/${file.id}`);
+        endpoints.push(`${API_BASE_URL}/shared/${file.id}/download`);
+
+        // dedupe
+        const seen = new Set();
+        const triedEndpoints = endpoints.filter(u => u && !seen.has(u) && (seen.add(u) || true));
+
+        let response = null;
+        let lastError = null;
+
+        for (const url of triedEndpoints) {
           try {
-            const err = await response.json();
-            if (err && err.error) msg = err.error;
-          } catch(e) { /* ignore json parse errors */ }
+            console.info('Trying download URL:', url);
+            response = await fetch(url, { method: 'GET', headers });
+            if (response.ok) {
+              console.info('Download endpoint succeeded:', url);
+              break;
+            } else {
+              // capture body for debugging
+              const bodyText = await response.clone().text().catch(() => '(no body)');
+              console.warn(`Endpoint ${url} returned ${response.status}:`, bodyText);
+
+              // If server explicitly says "Cannot download folders", surface friendly message and stop trying
+              try {
+                const maybeJson = JSON.parse(bodyText || '{}');
+                if (maybeJson && typeof maybeJson.error === 'string' && maybeJson.error.toLowerCase().includes('cannot download folder')) {
+                  showNotification('This item is a folder and the server disallows direct folder download. Ask the owner to provide a zip/share or enable folder downloads.', 'error');
+                  throw new Error(maybeJson.error);
+                }
+              } catch (e) {
+                // not JSON or parsing failed — continue to next endpoint
+              }
+
+              lastError = new Error(`Endpoint ${url} returned ${response.status}: ${bodyText}`);
+            }
+          } catch (err) {
+            console.warn('Fetch error for', url, err);
+            lastError = err;
+            response = null;
+          }
+        }
+
+        if (!response || !response.ok) {
+          let msg = `Download failed. Tried endpoints: ${triedEndpoints.join(', ')}`;
+          if (lastError && lastError.message) msg += ` — last error: ${lastError.message}`;
           throw new Error(msg);
         }
 
-        // Create blob from response and trigger download
+        // Successful response -> stream to blob and download
         const blob = await response.blob();
-        const url = window.URL.createObjectURL(blob);
+        const blobUrl = window.URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.style.display = 'none';
-        a.href = url;
-        a.download = file.name;
+        a.href = blobUrl;
+        a.download = file.name || (isFolder ? `${file.id}.zip` : 'download');
         document.body.appendChild(a);
         a.click();
-        window.URL.revokeObjectURL(url);
         document.body.removeChild(a);
-        
+        window.URL.revokeObjectURL(blobUrl);
+
         showNotification(`Download started: ${file.name}`, 'info');
-        
       } catch (error) {
-        console.error('Error downloading file:', error);
-        showNotification('Failed to download file: ' + error.message, 'error');
+        console.error('Error downloading shared file:', error);
+        // If the error message already explained folder restriction, don't duplicate
+        if (!/folder/i.test(error.message || '')) {
+          showNotification('Failed to download file. See console for details.', 'error');
+        }
       }
     }
 
